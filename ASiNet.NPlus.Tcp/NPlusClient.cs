@@ -34,9 +34,9 @@ public class NPlusClient : INplusClient
     private long _sendedBytes;
 
     private TcpClient _tcp = null!;
-    private Dictionary<Guid, (Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime)> _buffer = new();
+    private Dictionary<Guid, RequestPackage> _buffer = new();
 
-    public (byte[] Data, DateTime SendedDate, DateTime AcceptedDate) SendAndWaitResponse(Span<byte> package, CancellationToken token = default)
+    public ResponsePackage SendAndWaitResponse(Span<byte> package, CancellationToken token = default)
     {
         var stream = _tcp.GetStream();
         var id = Guid.NewGuid();
@@ -44,28 +44,28 @@ public class NPlusClient : INplusClient
         WriteNextPackage(id, package);
 
         var result = AcceptNext(stream, id, token);
-        return (result.Data, result.SendedTime, result.AcceptedTime);
+        return new(result.Data, result.SendedTime, result.AcceptedTime);
     }
 
-    public async Task<(byte[] Data, DateTime SendedDate, DateTime AcceptedDate)> SendAndWaitResponseAsync(byte[] package, CancellationToken token = default)
+    public async Task<ResponsePackage> SendAndWaitResponseAsync(byte[] package, CancellationToken token = default)
     {
         var stream = _tcp.GetStream();
         var id = Guid.NewGuid();
 
         WriteNextPackage(id, package);
         var result = await Task.Run(() => AcceptNext(stream, id, token));
-        return (result.Data, result.SendedTime, result.AcceptedTime);
+        return new(result.Data, result.SendedTime, result.AcceptedTime);
         
     }
 
     public void SendResponse(Guid id, byte[] package) => WriteNextPackage(id, package);
 
-    public async Task<(Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime)> AcceptNextAsync(CancellationToken token = default) => await Task.Run(ReadNextPackage, token);
-    public (Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime) AcceptNext() => ReadNextPackage();
+    public async Task<RequestPackage> AcceptNextAsync(CancellationToken token = default) => await Task.Run(ReadNextPackage, token);
+    public RequestPackage AcceptNext() => ReadNextPackage();
 
-    protected (Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime) AcceptNext(NetworkStream stream, Guid id, CancellationToken token = default)
+    protected RequestPackage AcceptNext(NetworkStream stream, Guid id, CancellationToken token = default)
     {
-        (Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime) package = default;
+        RequestPackage package = default;
         var source = new CancellationTokenSource();
         source.CancelAfter(AcceptTimeout);
         while (!token.IsCancellationRequested && !source.Token.IsCancellationRequested)
@@ -92,10 +92,10 @@ public class NPlusClient : INplusClient
             }
 
         }
-        return (Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
+        return new(Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
     }
 
-    protected (Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime) ReadNextPackage()
+    protected RequestPackage ReadNextPackage()
     {
         try
         {
@@ -121,15 +121,15 @@ public class NPlusClient : INplusClient
                     sendedTime = DateTime.FromBinary(BitConverter.ToInt64(sendedTimeBin));
                     _acceptedPackages++;
                     _acceptedBytes += buffer.Length + sizeof(int) + sizeof(decimal) + sizeof(long);
-                    return (idValue, buffer, sendedTime, DateTime.UtcNow);
+                    return new(idValue, buffer, sendedTime, DateTime.UtcNow);
 
                 }
             }
-            return (Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
+            return new(Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
         }
         catch (IOException)
         {
-            return (Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
+            return new(Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
         }
     }
 

@@ -46,7 +46,7 @@ public interface INplusClient : IDisposable
     /// <param name="package">Данные.</param>
     /// <param name="token">Токен отмены операции.</param>
     /// <returns>Полученые данные.</returns>
-    public Task<(byte[] Data, DateTime SendedDate, DateTime AcceptedDate)> SendAndWaitResponseAsync(byte[] package, CancellationToken token = default);
+    public Task<ResponsePackage> SendAndWaitResponseAsync(byte[] package, CancellationToken token = default);
 
     /// <summary>
     /// Отправить пакет и получить ответ.
@@ -54,7 +54,7 @@ public interface INplusClient : IDisposable
     /// <param name="package">Данные.</param>
     /// <param name="token">Токен отмены операции.</param>
     /// <returns>Полученые данные.</returns>
-    public (byte[] Data, DateTime SendedDate, DateTime AcceptedDate) SendAndWaitResponse(Span<byte> package, CancellationToken token = default);
+    public ResponsePackage SendAndWaitResponse(Span<byte> package, CancellationToken token = default);
     /// <summary>
     /// Отправить данные.
     /// </summary>
@@ -66,7 +66,7 @@ public interface INplusClient : IDisposable
     /// </summary>
     /// <param name="token">Токен отмены.</param>
     /// <returns>Id приёмника который ожидает ответ и данные пакета.</returns>
-    public Task<(Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime)> AcceptNextAsync(CancellationToken token = default);
+    public Task<RequestPackage> AcceptNextAsync(CancellationToken token = default);
 
-    public (Guid Id, byte[] Data, DateTime SendedTime, DateTime AcceptedTime) AcceptNext();
+    public RequestPackage AcceptNext();
 }
