@@ -99,33 +99,32 @@ public class NPlusClient : INplusClient
     {
         try
         {
-            Span<byte> sizeBin = stackalloc byte[sizeof(int)];
-            Span<byte> idBin = stackalloc byte[sizeof(decimal)];
-            Span<byte> sendedTimeBin = stackalloc byte[sizeof(long)];
-            var sizeValue = 0;
-            var idValue = Guid.Empty;
-            var stream = _tcp.GetStream();
-            var sendedTime = DateTime.MinValue;
+            if(_tcp.Available == 0)
+                return new(Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
             lock (_readerLocker)
             {
-                if (stream.DataAvailable)
-                {
-                    stream.Read(idBin);
-                    stream.Read(sendedTimeBin);
-                    stream.Read(sizeBin);
-                    idValue = new(idBin);
-                    sizeValue = BitConverter.ToInt32(sizeBin);
-                    var buffer = new byte[sizeValue];
-                    stream.Read(buffer);
+                Span<byte> sizeBin = stackalloc byte[sizeof(int)];
+                Span<byte> idBin = stackalloc byte[sizeof(decimal)];
+                Span<byte> sendedTimeBin = stackalloc byte[sizeof(long)];
+                var sizeValue = 0;
+                var idValue = Guid.Empty;
+                var stream = _tcp.GetStream();
+                var sendedTime = DateTime.MinValue;
 
-                    sendedTime = DateTime.FromBinary(BitConverter.ToInt64(sendedTimeBin));
-                    _acceptedPackages++;
-                    _acceptedBytes += buffer.Length + sizeof(int) + sizeof(decimal) + sizeof(long);
-                    return new(idValue, buffer, sendedTime, DateTime.UtcNow);
+                stream.Read(idBin);
+                stream.Read(sendedTimeBin);
+                stream.Read(sizeBin);
+                idValue = new(idBin);
+                sizeValue = BitConverter.ToInt32(sizeBin);
+                var buffer = new byte[sizeValue];
+                stream.Read(buffer);
 
-                }
+                sendedTime = DateTime.FromBinary(BitConverter.ToInt64(sendedTimeBin));
+                _acceptedPackages++;
+                _acceptedBytes += buffer.Length + sizeof(int) + sizeof(decimal) + sizeof(long);
+                return new(idValue, buffer, sendedTime, DateTime.UtcNow);
+
             }
-            return new(Guid.Empty, Array.Empty<byte>(), DateTime.MinValue, DateTime.MinValue);
         }
         catch (IOException)
         {
