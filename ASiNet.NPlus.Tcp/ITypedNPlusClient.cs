@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace ASiNet.NPlus.Tcp;
-public interface ITypedNPlusClient
+public interface ITypedNPlusClient : INplusClientProperties
 {
     public uint SerializerBufferSize { get; set; }
 
