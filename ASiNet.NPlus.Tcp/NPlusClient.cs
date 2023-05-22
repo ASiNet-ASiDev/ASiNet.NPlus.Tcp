@@ -1,9 +1,10 @@
-﻿using System.IO;
+﻿using ASiNet.Binary.Lib;
+using System.IO;
 using System.Net.Http;
 using System.Net.Sockets;
 
 namespace ASiNet.NPlus.Tcp;
-public class NPlusClient : INplusClient
+public class NPlusClient : INplusClient, ITypedNPlusClient
 {
 
     public NPlusClient(TcpClient client)
@@ -19,6 +20,8 @@ public class NPlusClient : INplusClient
     public int SendedPackages => _sendedPackages;
     public long AcceptedBytes => _acceptedBytes;
     public long SendedBytes => _sendedBytes;
+
+    public uint SerializerBufferSize { get; set; } = 4096;
 
     public TimeSpan AcceptTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
@@ -47,6 +50,27 @@ public class NPlusClient : INplusClient
         return new(result.Data, result.SendedTime, result.AcceptedTime);
     }
 
+    public ResponsePackage<TOut> SendAndWaitResponse<TIn, TOut>(TIn data, CancellationToken token = default) where TOut : new()
+    {
+        var stream = _tcp.GetStream();
+        var id = Guid.NewGuid();
+
+        var buffer = new BinaryBuffer(stackalloc byte[(int)SerializerBufferSize]);
+
+        if(!BinaryBufferSerializer.Serialize(data, ref buffer))
+            throw new Exception("Serialize <TIn> error!");
+
+        WriteNextPackage(id, buffer.ToSpan());
+
+        buffer.Clear();
+
+        var result = AcceptNext(stream, id, token);
+        if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
+            return new(dataObj, result.SendedTime, result.AcceptedTime);
+        else
+            throw new Exception("Deserialize <TOut> error!");
+    }
+
     public async Task<ResponsePackage> SendAndWaitResponseAsync(byte[] package, CancellationToken token = default)
     {
         var stream = _tcp.GetStream();
@@ -58,10 +82,75 @@ public class NPlusClient : INplusClient
         
     }
 
+    public async Task<ResponsePackage<TOut>> SendAndWaitResponseAsync<TIn, TOut>(TIn data, CancellationToken token = default) where TOut : new()
+    {
+        var result = await Task.Run(() =>
+        {
+            var stream = _tcp.GetStream();
+            var id = Guid.NewGuid();
+
+            var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+
+            if (!BinaryBufferSerializer.Serialize(data, ref buffer))
+                throw new Exception("Serialize <TIn> error!");
+
+            WriteNextPackage(id, buffer.ToSpan());
+            var result = AcceptNext(stream, id, token);
+
+            if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
+                return new ResponsePackage<TOut>(dataObj, result.SendedTime, result.AcceptedTime);
+            else
+                throw new Exception("Deserialize <TOut> error!");
+        });
+        return result;
+    }
+
     public void SendResponse(Guid id, byte[] package) => WriteNextPackage(id, package);
 
-    public async Task<RequestPackage> AcceptNextAsync(CancellationToken token = default) => await Task.Run(ReadNextPackage, token);
+    public void SendResponse<TOut>(Guid id, TOut data)
+    {
+        var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+
+        if (!BinaryBufferSerializer.Serialize(data, ref buffer))
+            throw new Exception("Serialize <TOut> error!");
+
+        WriteNextPackage(id, buffer.ToSpan());
+    }
+
     public RequestPackage AcceptNext() => ReadNextPackage();
+
+    public RequestPackage<TOut> AcceptNext<TOut>() where TOut : new()
+    {
+        var package = ReadNextPackage();
+
+        var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+
+        buffer.Write(package.Data);
+
+        if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
+            return new RequestPackage<TOut>(package.Id, dataObj, package.SendedTime, package.AcceptedTime);
+        else
+            throw new Exception("Deserialize <TOut> error!");
+    }
+
+    public async Task<RequestPackage> AcceptNextAsync(CancellationToken token = default) => await Task.Run(ReadNextPackage, token);
+
+    public async Task<RequestPackage<TOut>> AcceptNextAsync<TOut>(CancellationToken token = default) where TOut : new()
+    {
+        var result = await Task.Run(() => {
+            var package = ReadNextPackage();
+
+            var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+
+            buffer.Write(package.Data);
+
+            if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
+                return new RequestPackage<TOut>(package.Id, dataObj, package.SendedTime, package.AcceptedTime);
+            else
+                throw new Exception("Deserialize <TOut> error!");
+        });
+        return result;
+    }
 
     protected RequestPackage AcceptNext(NetworkStream stream, Guid id, CancellationToken token = default)
     {
