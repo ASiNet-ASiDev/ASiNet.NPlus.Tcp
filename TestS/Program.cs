@@ -1,25 +1,38 @@
-﻿using ASiNet.NPlus.Tcp;
-using System.Net.Sockets;
+﻿
+using ASiNet.NPlus.ServerModel;
+using ASiNet.NPlus.ServerModel.Builders;
 
-var listener = new TcpListener(System.Net.IPAddress.Any, 44444);
-listener.Start();
+var associationModel = new AssociationModelBuilder()
+    .AddController<AuthServise>("auth")
+    .Build();
 
-var npClient = new NPlusClient(listener.AcceptTcpClient());
+var server = new NPlusServer(System.Net.IPAddress.Any, 44999, associationModel);
 
-
-while (true)
-{
-    var result = await npClient.AcceptNextAsync();
-    if(result.Id == Guid.Empty)
-    {
-        await Task.Delay(1000);
-        continue;
-    }
-    npClient.SendResponse(result.Id, result.Data);
-
-    Console.WriteLine($"[{result.Id.ToString("N")}] [{string.Join(' ', result.Data)}]");
-}
-
-
+server.Start();
 
 Console.ReadLine();
+
+
+class AuthServise
+{
+    [MethodName("login")]
+    public AuthResult Login(AuthResponse response)
+    {
+        if (response.Login == "adm" && response.Password == "0000")
+            return new() { IsDone = true };
+        else
+            return new() { IsDone = false };
+    }
+}
+
+class AuthResponse
+{
+    public string Login { get; set; }
+
+    public string Password { get; set; }
+}
+
+class AuthResult
+{
+    public bool IsDone { get; set; }
+}

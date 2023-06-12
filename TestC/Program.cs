@@ -1,17 +1,28 @@
 ﻿using ASiNet.NPlus.Tcp;
+using ASiNetNPlus.ServerModel.Client;
 using System.Net.Sockets;
 
-var npClient = new NPlusClient(new("127.0.0.1", 44444));
+var npClient = new NPlusServerModelClient("127.0.0.1", 44999);
 
-Parallel.For(0, 10000, (i) =>
+using (var authRC = npClient.GetController("auth"))
 {
-    var buffer = new byte[16];
-    Random.Shared.NextBytes(buffer);
-    var result = npClient.SendAndWaitResponse(buffer);
+    var result = authRC.ExecuteController<AuthResult, AuthResponse>("login", new AuthResponse() { Login = "adm", Password = "0000" });
 
-    if (result.AcceptedTime > DateTime.MinValue)
-        Console.WriteLine($"[{i}]\nBuffer:[{npClient.PackagesInBuffer}]\nP:[{npClient.AcceptedPackages}/{npClient.SendedPackages}]\nBytes[{npClient.SendedBytes}/{npClient.AcceptedBytes}]\nS: [{string.Join(' ', buffer)}] \nA: [{string.Join(' ', result.Data)}]");
-    else
-        Console.WriteLine($"[{i}] PACKAGE NOT FOUND!");
-});
+    Console.WriteLine(result.IsDone);
+}
+
+
 Console.ReadLine();
+
+
+class AuthResponse
+{
+    public string Login { get; set; }
+
+    public string Password { get; set; }
+}
+
+class AuthResult
+{
+    public bool IsDone { get; set; }
+}

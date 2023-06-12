@@ -8,7 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ASiNet.NPlus.Tcp\ASiNet.NPlus.Tcp.csproj" />
+    <ProjectReference Include="..\ASiNet.NPlus.Core\ASiNet.NPlus.Core.csproj" />
+    <ProjectReference Include="..\ASiNet.NPlus.ServerModel\ASiNet.NPlus.ServerModel.csproj" />
   </ItemGroup>
 
 </Project>

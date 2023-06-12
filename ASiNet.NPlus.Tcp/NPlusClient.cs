@@ -1,14 +1,22 @@
 ﻿using ASiNet.Binary.Lib;
+using ASiNet.Binary.Lib.Serializer;
 using System.IO;
 using System.Net.Http;
 using System.Net.Sockets;
 
 namespace ASiNet.NPlus.Tcp;
-public class NPlusClient : INplusClient, ITypedNPlusClient
+public class NPlusClient : INPlusClient, ITypedNPlusClient
 {
 
     public NPlusClient(TcpClient client)
     {
+        client.ReceiveTimeout = TimeSpan.FromSeconds(60).Milliseconds;
+        _tcp = client;
+    }
+
+    public NPlusClient(string host, int port)
+    {
+        var client = new TcpClient(host, port);
         client.ReceiveTimeout = TimeSpan.FromSeconds(60).Milliseconds;
         _tcp = client;
     }
@@ -44,10 +52,12 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
         var stream = _tcp.GetStream();
         var id = Guid.NewGuid();
 
-        WriteNextPackage(id, package);
+        var wr = WriteNextPackage(id, package);
+        if(wr != NPlusStatus.Done)
+            return new(Array.Empty<byte>(), wr, DateTime.MinValue, DateTime.MinValue);
 
         var result = AcceptNext(stream, id, token);
-        return new(result.Data, NPlusStatus.None, result.SendedTime, result.AcceptedTime);
+        return new(result.Data, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
     }
 
     public ResponsePackage<TOut> SendAndWaitResponse<TIn, TOut>(TIn data, CancellationToken token = default) where TOut : new()
@@ -55,20 +65,23 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
         var stream = _tcp.GetStream();
         var id = Guid.NewGuid();
 
-        var buffer = new BinaryBuffer(stackalloc byte[(int)SerializerBufferSize]);
+        Span<byte> buffer = SerializerBufferSize < ushort.MaxValue ? stackalloc byte[(int)SerializerBufferSize] : new byte[(int)SerializerBufferSize];
 
-        if(!BinaryBufferSerializer.Serialize(data, ref buffer))
-            throw new Exception("Serialize <TIn> error!");
+        var serializeResult = BinarySerializer.Serialize(data, buffer);
 
-        WriteNextPackage(id, buffer.ToSpan());
+        if (serializeResult == -1)
+            return new(default, NPlusStatus.SerializeError, DateTime.MinValue, DateTime.MinValue);
 
-        buffer.Clear();
+        var wr = WriteNextPackage(id, buffer.Slice(0, serializeResult));
+        if (wr != NPlusStatus.Done)
+            return new(default, wr, DateTime.MinValue, DateTime.MinValue);
+
 
         var result = AcceptNext(stream, id, token);
-        if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
-            return new(dataObj, NPlusStatus.None, result.SendedTime, result.AcceptedTime);
+        if (BinarySerializer.Deserialize<TOut>(result.Data) is TOut dataObj)
+            return new(dataObj, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
         else
-            throw new Exception("Deserialize <TOut> error!");
+            return new(default, NPlusStatus.DeserializeError, DateTime.MinValue, DateTime.MinValue);
     }
 
     public async Task<ResponsePackage> SendAndWaitResponseAsync(byte[] package, CancellationToken token = default)
@@ -76,9 +89,12 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
         var stream = _tcp.GetStream();
         var id = Guid.NewGuid();
 
-        WriteNextPackage(id, package);
+        var wr = WriteNextPackage(id, package);
+        if (wr != NPlusStatus.Done)
+            return new(Array.Empty<byte>(), wr, DateTime.MinValue, DateTime.MinValue);
+
         var result = await Task.Run(() => AcceptNext(stream, id, token));
-        return new(result.Data, NPlusStatus.None, result.SendedTime, result.AcceptedTime);
+        return new(result.Data, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
         
     }
 
@@ -89,32 +105,40 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
             var stream = _tcp.GetStream();
             var id = Guid.NewGuid();
 
-            var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+            Span<byte> buffer = SerializerBufferSize < ushort.MaxValue ? stackalloc byte[(int)SerializerBufferSize] : new byte[(int)SerializerBufferSize];
+            var serializeResult = BinarySerializer.Serialize(data, buffer);
 
-            if (!BinaryBufferSerializer.Serialize(data, ref buffer))
-                throw new Exception("Serialize <TIn> error!");
+            if (serializeResult == -1)
+                return new(default, NPlusStatus.SerializeError, DateTime.MinValue, DateTime.MinValue);
 
-            WriteNextPackage(id, buffer.ToSpan());
+            var wr = WriteNextPackage(id, buffer.Slice(0, serializeResult));
+            if (wr != NPlusStatus.Done)
+                return new(default, wr, DateTime.MinValue, DateTime.MinValue);
+
             var result = AcceptNext(stream, id, token);
 
-            if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
-                return new ResponsePackage<TOut>(dataObj, NPlusStatus.None, result.SendedTime, result.AcceptedTime);
+            if (BinarySerializer.Deserialize<TOut>(result.Data) is TOut dataObj)
+                return new ResponsePackage<TOut>(dataObj, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
             else
-                throw new Exception("Deserialize <TOut> error!");
+                return new(default, NPlusStatus.DeserializeError, DateTime.MinValue, DateTime.MinValue);
         });
         return result;
     }
 
-    public void SendResponse(Guid id, byte[] package) => WriteNextPackage(id, package);
+    public NPlusStatus SendResponse(Guid id, byte[] package, NPlusStatus status = NPlusStatus.Done) => WriteNextPackage(id, package, status);
 
-    public void SendResponse<TOut>(Guid id, TOut data)
+    public NPlusStatus SendResponse(Guid id, Span<byte> package, NPlusStatus status = NPlusStatus.Done) => WriteNextPackage(id, package, status);
+
+    public NPlusStatus SendResponse<TOut>(Guid id, TOut data)
     {
-        var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+        Span<byte> buffer = SerializerBufferSize < ushort.MaxValue ? stackalloc byte[(int)SerializerBufferSize] : new byte[(int)SerializerBufferSize];
 
-        if (!BinaryBufferSerializer.Serialize(data, ref buffer))
-            throw new Exception("Serialize <TOut> error!");
+        var serializeResult = BinarySerializer.Serialize(data, buffer);
 
-        WriteNextPackage(id, buffer.ToSpan());
+        if (serializeResult == -1)
+            return NPlusStatus.SerializeError;
+
+        return WriteNextPackage(id, buffer.Slice(0, serializeResult));
     }
 
     public RequestPackage AcceptNext() => ReadNextPackage();
@@ -123,14 +147,13 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
     {
         var package = ReadNextPackage();
 
-        var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+        if (package.Status != NPlusStatus.Done)
+            return new(Guid.Empty, package.Status, default, DateTime.MinValue, DateTime.MinValue);
 
-        buffer.Write(package.Data);
-
-        if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
-            return new RequestPackage<TOut>(package.Id, NPlusStatus.None, dataObj, package.SendedTime, package.AcceptedTime);
+        if (BinarySerializer.Deserialize<TOut>(package.Data) is TOut dataObj)
+            return new RequestPackage<TOut>(package.Id, NPlusStatus.Done, dataObj, package.SendedTime, package.AcceptedTime);
         else
-            throw new Exception("Deserialize <TOut> error!");
+            return new(Guid.Empty, NPlusStatus.DeserializeError, default, DateTime.MinValue, DateTime.MinValue);
     }
 
     public async Task<RequestPackage> AcceptNextAsync(CancellationToken token = default) => await Task.Run(ReadNextPackage, token);
@@ -140,14 +163,13 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
         var result = await Task.Run(() => {
             var package = ReadNextPackage();
 
-            var buffer = new BinaryBuffer(new byte[(int)SerializerBufferSize]);
+            if(package.Status != NPlusStatus.Done)
+                return new(Guid.Empty, package.Status, default, DateTime.MinValue, DateTime.MinValue);
 
-            buffer.Write(package.Data);
-
-            if (BinaryBufferSerializer.Deserialize<TOut>(ref buffer) is TOut dataObj)
-                return new RequestPackage<TOut>(package.Id, NPlusStatus.None, dataObj, package.SendedTime, package.AcceptedTime);
+            if (BinarySerializer.Deserialize<TOut>(package.Data) is TOut dataObj)
+                return new RequestPackage<TOut>(package.Id, NPlusStatus.Done, dataObj, package.SendedTime, package.AcceptedTime);
             else
-                throw new Exception("Deserialize <TOut> error!");
+                return new(Guid.Empty, NPlusStatus.DeserializeError, default, DateTime.MinValue, DateTime.MinValue);
         });
         return result;
     }
@@ -173,6 +195,8 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
                         return package;
 
                 }
+                else
+                    Task.Delay(100).Wait();
             }
             lock (_bufferLocker)
             {
@@ -186,36 +210,27 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
 
     protected RequestPackage ReadNextPackage()
     {
+        if (!IsConnected)
+            return new(Guid.Empty, Array.Empty<byte>(), NPlusStatus.Disconnected, DateTime.MinValue, DateTime.MinValue);
         try
         {
-            if(_tcp.Available == 0)
+            if (_tcp.Available == 0)
                 return new(Guid.Empty, Array.Empty<byte>(), NPlusStatus.NotAvalible, DateTime.MinValue, DateTime.MinValue);
             lock (_readerLocker)
             {
-                Span<byte> sizeBin = stackalloc byte[sizeof(int)];
-                Span<byte> idBin = stackalloc byte[sizeof(decimal)];
-                Span<byte> sendedTimeBin = stackalloc byte[sizeof(long)];
-                Span<byte> statusBin = stackalloc byte[sizeof(ushort)];
-                var sizeValue = 0;
-                var idValue = Guid.Empty;
                 var stream = _tcp.GetStream();
-                var sendedTime = DateTime.MinValue;
-                var status = (ushort)0;
+                Span<byte> rb = stackalloc byte[PackageHeader.HEADER_BINARY_SIZE];
 
-                stream.Read(idBin);
-                stream.Read(statusBin);
-                stream.Read(sendedTimeBin);
-                stream.Read(sizeBin);
-                idValue = new(idBin);
-                sizeValue = BitConverter.ToInt32(sizeBin);
-                status = BitConverter.ToUInt16(statusBin);
-                var buffer = new byte[sizeValue];
-                stream.Read(buffer);
+                stream.Read(rb);
 
-                sendedTime = DateTime.FromBinary(BitConverter.ToInt64(sendedTimeBin));
+                var header = BinarySerializer.Deserialize<PackageHeader>(rb);
+
+                var dataBuffer = new byte[header.DataSize];
+                stream.Read(dataBuffer);
+
                 _acceptedPackages++;
-                _acceptedBytes += buffer.Length + sizeof(int) + sizeof(decimal) + sizeof(long) + sizeof(ushort);
-                return new(idValue, buffer, (NPlusStatus)status, sendedTime, DateTime.UtcNow);
+                _acceptedBytes += header.DataSize + PackageHeader.HEADER_BINARY_SIZE;
+                return new(header.Id, dataBuffer, header.Status, header.SendedTime, DateTime.UtcNow);
 
             }
         }
@@ -225,24 +240,38 @@ public class NPlusClient : INplusClient, ITypedNPlusClient
         }
     }
 
-    protected void WriteNextPackage(Guid id, in Span<byte> package, NPlusStatus error = NPlusStatus.None)
+    protected NPlusStatus WriteNextPackage(Guid id, in Span<byte> package, NPlusStatus error = NPlusStatus.Done)
     {
+        if (!IsConnected)
+            return NPlusStatus.Disconnected;
         try
         {
             var stream = _tcp.GetStream();
             lock (_writerLocker)
             {
-                stream.Write(id.ToByteArray());
-                stream.Write(BitConverter.GetBytes((ushort)error));
-                stream.Write(BitConverter.GetBytes(DateTime.UtcNow.ToBinary()));
-                stream.Write(BitConverter.GetBytes(package.Length));
+                var header = new PackageHeader()
+                { 
+                    DataSize = (ushort)package.Length,
+                    Id = id,
+                    SendedTime = DateTime.UtcNow,
+                    Status = error
+                };
+
+                Span<byte> buffer = stackalloc byte[PackageHeader.HEADER_BINARY_SIZE];
+                if(BinarySerializer.Serialize(header, buffer) == -1)
+                    return NPlusStatus.SerializeError;
+
+                stream.Write(buffer);
                 stream.Write(package);
                 _sendedPackages++;
-                _sendedBytes += package.Length + sizeof(int) + sizeof(decimal) + sizeof(long);
+                _sendedBytes += package.Length + PackageHeader.HEADER_BINARY_SIZE;
             }
+            return NPlusStatus.Done;
         }
         catch (IOException)
-        { }
+        {
+            return NPlusStatus.Disconnected;
+        }
     }
 
     protected bool CheckConnected()

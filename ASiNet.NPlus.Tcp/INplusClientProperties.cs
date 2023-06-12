@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace ASiNet.NPlus.Tcp;
-public interface INplusClientProperties
+public interface INPlusClientProperties
 {
     /// <summary>
     /// <see cref="true"/> если подключён к удалённому сокету, иначе <see cref="false"/>.

@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace ASiNet.NPlus.Tcp;
-public interface INplusClient : IDisposable, INplusClientProperties
+public interface INPlusClient : IDisposable, INPlusClientProperties
 {
     /// <summary>
     /// Отправить пакет и получить ответ.
@@ -27,7 +27,9 @@ public interface INplusClient : IDisposable, INplusClientProperties
     /// </summary>
     /// <param name="id">id приёмника на который требуется отправить данные.</param>
     /// <param name="package">Данные.</param>
-    public void SendResponse(Guid id, byte[] package);
+    public NPlusStatus SendResponse(Guid id, byte[] package, NPlusStatus status = NPlusStatus.Done);
+
+    public NPlusStatus SendResponse(Guid id, Span<byte> package, NPlusStatus status = NPlusStatus.Done);
     /// <summary>
     /// Принять следующий пакет данных.
     /// </summary>
