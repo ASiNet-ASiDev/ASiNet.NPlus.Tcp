@@ -9,7 +9,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ASiNet.NPlus.Tcp\ASiNet.NPlus.Tcp.csproj" />
-    <ProjectReference Include="..\ASiNetNPlus.ServerModel.Client\ASiNetNPlus.ServerModel.Client.csproj" />
   </ItemGroup>
 
 </Project>

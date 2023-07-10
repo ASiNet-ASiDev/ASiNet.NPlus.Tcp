@@ -1,24 +1,32 @@
-﻿using ASiNet.Binary.Lib;
-using ASiNet.Binary.Lib.Serializer;
-using System.IO;
-using System.Net.Http;
+﻿using ASiNet.Binary.Lib.Serializer;
+using ASiNet.NPlus.Tcp.Exceptions;
+using ASiNet.NPlus.Tcp.Interfaces;
+using ASiNet.NPlus.Tcp.IO;
 using System.Net.Sockets;
 
 namespace ASiNet.NPlus.Tcp;
-public class NPlusClient : INPlusClient, ITypedNPlusClient
+public class NPlusClient : INPlusClient
 {
 
     public NPlusClient(TcpClient client)
     {
         client.ReceiveTimeout = TimeSpan.FromSeconds(60).Milliseconds;
         _tcp = client;
+
+        _reader = new(() => new PackageReader(this));
+        _writer = new(() => new PackageWriter(this));
     }
 
     public NPlusClient(string host, int port)
     {
-        var client = new TcpClient(host, port);
-        client.ReceiveTimeout = TimeSpan.FromSeconds(60).Milliseconds;
+        var client = new TcpClient(host, port)
+        {
+            ReceiveTimeout = TimeSpan.FromSeconds(60).Milliseconds
+        };
         _tcp = client;
+
+        _reader = new(() => new PackageReader(this));
+        _writer = new(() => new PackageWriter(this));
     }
 
     public bool IsConnected => CheckConnected();
@@ -29,189 +37,66 @@ public class NPlusClient : INPlusClient, ITypedNPlusClient
     public long AcceptedBytes => _acceptedBytes;
     public long SendedBytes => _sendedBytes;
 
-    public uint SerializerBufferSize { get; set; } = 4096;
-
     public TimeSpan AcceptTimeout { get; set; } = TimeSpan.FromSeconds(30);
-
-    public int PackagesInBuffer => _buffer.Count;
 
     private readonly object _readerLocker = new();
     private readonly object _writerLocker = new();
-    private readonly object _bufferLocker = new();
 
     private int _acceptedPackages;
     private int _sendedPackages;
     private long _acceptedBytes;
     private long _sendedBytes;
 
+    private Lazy<IPackageReader> _reader;
+    public Lazy<IPackageWriter> _writer;
+
     private TcpClient _tcp = null!;
-    private Dictionary<Guid, RequestPackage> _buffer = new();
 
-    public ResponsePackage SendAndWaitResponse(Span<byte> package, CancellationToken token = default)
+    public Guid WriteNextPackage(Span<byte> data)
     {
-        var stream = _tcp.GetStream();
         var id = Guid.NewGuid();
+        var result = WritePackage(id, data);
 
-        var wr = WriteNextPackage(id, package);
-        if(wr != NPlusStatus.Done)
-            return new(Array.Empty<byte>(), wr, DateTime.MinValue, DateTime.MinValue);
-
-        var result = AcceptNext(stream, id, token);
-        return new(result.Data, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
-    }
-
-    public ResponsePackage<TOut> SendAndWaitResponse<TIn, TOut>(TIn data, CancellationToken token = default) where TOut : new()
-    {
-        var stream = _tcp.GetStream();
-        var id = Guid.NewGuid();
-
-        Span<byte> buffer = SerializerBufferSize < ushort.MaxValue ? stackalloc byte[(int)SerializerBufferSize] : new byte[(int)SerializerBufferSize];
-
-        var serializeResult = BinarySerializer.Serialize(data, buffer);
-
-        if (serializeResult == -1)
-            return new(default, NPlusStatus.SerializeError, DateTime.MinValue, DateTime.MinValue);
-
-        var wr = WriteNextPackage(id, buffer.Slice(0, serializeResult));
-        if (wr != NPlusStatus.Done)
-            return new(default, wr, DateTime.MinValue, DateTime.MinValue);
-
-
-        var result = AcceptNext(stream, id, token);
-        if (BinarySerializer.Deserialize<TOut>(result.Data) is TOut dataObj)
-            return new(dataObj, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
+        if (result == NPlusStatus.Done)
+            return id;
         else
-            return new(default, NPlusStatus.DeserializeError, DateTime.MinValue, DateTime.MinValue);
+            throw new NPlusWriteException(result);
     }
 
-    public async Task<ResponsePackage> SendAndWaitResponseAsync(byte[] package, CancellationToken token = default)
+    public Guid WriteNextPackage(byte[] data)
     {
-        var stream = _tcp.GetStream();
         var id = Guid.NewGuid();
+        var result = WritePackage(id, data);
 
-        var wr = WriteNextPackage(id, package);
-        if (wr != NPlusStatus.Done)
-            return new(Array.Empty<byte>(), wr, DateTime.MinValue, DateTime.MinValue);
-
-        var result = await Task.Run(() => AcceptNext(stream, id, token));
-        return new(result.Data, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
-        
-    }
-
-    public async Task<ResponsePackage<TOut>> SendAndWaitResponseAsync<TIn, TOut>(TIn data, CancellationToken token = default) where TOut : new()
-    {
-        var result = await Task.Run(() =>
-        {
-            var stream = _tcp.GetStream();
-            var id = Guid.NewGuid();
-
-            Span<byte> buffer = SerializerBufferSize < ushort.MaxValue ? stackalloc byte[(int)SerializerBufferSize] : new byte[(int)SerializerBufferSize];
-            var serializeResult = BinarySerializer.Serialize(data, buffer);
-
-            if (serializeResult == -1)
-                return new(default, NPlusStatus.SerializeError, DateTime.MinValue, DateTime.MinValue);
-
-            var wr = WriteNextPackage(id, buffer.Slice(0, serializeResult));
-            if (wr != NPlusStatus.Done)
-                return new(default, wr, DateTime.MinValue, DateTime.MinValue);
-
-            var result = AcceptNext(stream, id, token);
-
-            if (BinarySerializer.Deserialize<TOut>(result.Data) is TOut dataObj)
-                return new ResponsePackage<TOut>(dataObj, NPlusStatus.Done, result.SendedTime, result.AcceptedTime);
-            else
-                return new(default, NPlusStatus.DeserializeError, DateTime.MinValue, DateTime.MinValue);
-        });
-        return result;
-    }
-
-    public NPlusStatus SendResponse(Guid id, byte[] package, NPlusStatus status = NPlusStatus.Done) => WriteNextPackage(id, package, status);
-
-    public NPlusStatus SendResponse(Guid id, Span<byte> package, NPlusStatus status = NPlusStatus.Done) => WriteNextPackage(id, package, status);
-
-    public NPlusStatus SendResponse<TOut>(Guid id, TOut data)
-    {
-        Span<byte> buffer = SerializerBufferSize < ushort.MaxValue ? stackalloc byte[(int)SerializerBufferSize] : new byte[(int)SerializerBufferSize];
-
-        var serializeResult = BinarySerializer.Serialize(data, buffer);
-
-        if (serializeResult == -1)
-            return NPlusStatus.SerializeError;
-
-        return WriteNextPackage(id, buffer.Slice(0, serializeResult));
-    }
-
-    public RequestPackage AcceptNext() => ReadNextPackage();
-
-    public RequestPackage<TOut> AcceptNext<TOut>() where TOut : new()
-    {
-        var package = ReadNextPackage();
-
-        if (package.Status != NPlusStatus.Done)
-            return new(Guid.Empty, package.Status, default, DateTime.MinValue, DateTime.MinValue);
-
-        if (BinarySerializer.Deserialize<TOut>(package.Data) is TOut dataObj)
-            return new RequestPackage<TOut>(package.Id, NPlusStatus.Done, dataObj, package.SendedTime, package.AcceptedTime);
+        if (result == NPlusStatus.Done)
+            return id;
         else
-            return new(Guid.Empty, NPlusStatus.DeserializeError, default, DateTime.MinValue, DateTime.MinValue);
+            throw new NPlusReadException(result);
     }
 
-    public async Task<RequestPackage> AcceptNextAsync(CancellationToken token = default) => await Task.Run(ReadNextPackage, token);
-
-    public async Task<RequestPackage<TOut>> AcceptNextAsync<TOut>(CancellationToken token = default) where TOut : new()
-    {
-        var result = await Task.Run(() => {
-            var package = ReadNextPackage();
-
-            if(package.Status != NPlusStatus.Done)
-                return new(Guid.Empty, package.Status, default, DateTime.MinValue, DateTime.MinValue);
-
-            if (BinarySerializer.Deserialize<TOut>(package.Data) is TOut dataObj)
-                return new RequestPackage<TOut>(package.Id, NPlusStatus.Done, dataObj, package.SendedTime, package.AcceptedTime);
-            else
-                return new(Guid.Empty, NPlusStatus.DeserializeError, default, DateTime.MinValue, DateTime.MinValue);
-        });
-        return result;
-    }
-
-    protected RequestPackage AcceptNext(NetworkStream stream, Guid id, CancellationToken token = default)
-    {
-        RequestPackage package = default;
-        var source = new CancellationTokenSource();
-        source.CancelAfter(AcceptTimeout);
-        while (!token.IsCancellationRequested && !source.Token.IsCancellationRequested)
-        {
-            lock (_readerLocker)
-            {
-                if (stream.DataAvailable)
-                {
-                    package = ReadNextPackage();
-
-                    if (package.Id != id)
-                        lock (_bufferLocker)
-                            _buffer.Add(package.Id, package);
-                            
-                    else
-                        return package;
-
-                }
-                else
-                    Task.Delay(100).Wait();
-            }
-            lock (_bufferLocker)
-            {
-                if(_buffer.ContainsKey(id) && _buffer.Remove(id, out var data))
-                    return data;
-            }
-
-        }
-        return new(Guid.Empty, Array.Empty<byte>(), NPlusStatus.Timeout, DateTime.MinValue, DateTime.MinValue);
-    }
-
-    protected RequestPackage ReadNextPackage()
+    public IPackageReader GetReader()
     {
         if (!IsConnected)
-            return new(Guid.Empty, Array.Empty<byte>(), NPlusStatus.Disconnected, DateTime.MinValue, DateTime.MinValue);
+            throw new NPlusConnectionException();
+        return _reader.Value;
+    }
+
+    public IPackageWriter GetWriter()
+    {
+        if (!IsConnected)
+            throw new NPlusConnectionException();
+        return _writer.Value;
+    }
+
+    public Package ReadNextPackage()
+    {
+        return ReadPackage();
+    }
+
+    protected Package ReadPackage()
+    {
+        if (!IsConnected)
+            throw new NPlusConnectionException();
         try
         {
             if (_tcp.Available == 0)
@@ -236,21 +121,21 @@ public class NPlusClient : INPlusClient, ITypedNPlusClient
         }
         catch (IOException)
         {
-            return new(Guid.Empty, Array.Empty<byte>(), NPlusStatus.AcceptError, DateTime.MinValue, DateTime.MinValue);
+            throw new NPlusConnectionException();
         }
     }
 
-    protected NPlusStatus WriteNextPackage(Guid id, in Span<byte> package, NPlusStatus error = NPlusStatus.Done)
+    protected NPlusStatus WritePackage(Guid id, in Span<byte> package, NPlusStatus error = NPlusStatus.Done)
     {
         if (!IsConnected)
-            return NPlusStatus.Disconnected;
+            throw new NPlusConnectionException();
         try
         {
             var stream = _tcp.GetStream();
             lock (_writerLocker)
             {
                 var header = new PackageHeader()
-                { 
+                {
                     DataSize = (ushort)package.Length,
                     Id = id,
                     SendedTime = DateTime.UtcNow,
@@ -258,8 +143,8 @@ public class NPlusClient : INPlusClient, ITypedNPlusClient
                 };
 
                 Span<byte> buffer = stackalloc byte[PackageHeader.HEADER_BINARY_SIZE];
-                if(BinarySerializer.Serialize(header, buffer) == -1)
-                    return NPlusStatus.SerializeError;
+                if (BinarySerializer.Serialize(header, buffer) == -1)
+                    throw new NPlusSerializerException();
 
                 stream.Write(buffer);
                 stream.Write(package);
@@ -270,7 +155,7 @@ public class NPlusClient : INPlusClient, ITypedNPlusClient
         }
         catch (IOException)
         {
-            return NPlusStatus.Disconnected;
+            throw new NPlusConnectionException();
         }
     }
 
@@ -301,6 +186,10 @@ public class NPlusClient : INPlusClient, ITypedNPlusClient
     public void Dispose()
     {
         _tcp?.Dispose();
+        if (_reader.IsValueCreated)
+            _reader.Value.Dispose();
+        if (_writer.IsValueCreated)
+            _writer.Value.Dispose();
         GC.SuppressFinalize(this);
     }
 }

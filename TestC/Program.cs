@@ -1,28 +1,11 @@
 ﻿using ASiNet.NPlus.Tcp;
-using ASiNetNPlus.ServerModel.Client;
-using System.Net.Sockets;
-
-var npClient = new NPlusServerModelClient("127.0.0.1", 44999);
-
-using (var authRC = npClient.GetController("auth"))
-{
-    var result = authRC.ExecuteController<AuthResult, AuthResponse>("login", new AuthResponse() { Login = "adm", Password = "0000" });
-
-    Console.WriteLine(result.IsDone);
-}
 
 
-Console.ReadLine();
+var np = new NPlusClient("127.0.0.1", 44544);
 
+var reader = np.GetReader();
+var writer = np.GetWriter();
 
-class AuthResponse
-{
-    public string Login { get; set; }
+var packId = writer.WritePackage(new byte[] { 20, 20, 20 });
 
-    public string Password { get; set; }
-}
-
-class AuthResult
-{
-    public bool IsDone { get; set; }
-}
+var response = reader.ReadPackage(packId);

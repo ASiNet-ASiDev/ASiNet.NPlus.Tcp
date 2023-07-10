@@ -1,38 +1,11 @@
 ﻿
-using ASiNet.NPlus.ServerModel;
-using ASiNet.NPlus.ServerModel.Builders;
+using ASiNet.NPlus.Tcp;
+using System.Net.Sockets;
 
-var associationModel = new AssociationModelBuilder()
-    .AddController<AuthServise>("auth")
-    .Build();
+var listener = new TcpListener(System.Net.IPAddress.Any, 44544);
 
-var server = new NPlusServer(System.Net.IPAddress.Any, 44999, associationModel);
+listener.Start();
 
-server.Start();
+var np = new NPlusClient(listener.AcceptTcpClient());
 
-Console.ReadLine();
-
-
-class AuthServise
-{
-    [MethodName("login")]
-    public AuthResult Login(AuthResponse response)
-    {
-        if (response.Login == "adm" && response.Password == "0000")
-            return new() { IsDone = true };
-        else
-            return new() { IsDone = false };
-    }
-}
-
-class AuthResponse
-{
-    public string Login { get; set; }
-
-    public string Password { get; set; }
-}
-
-class AuthResult
-{
-    public bool IsDone { get; set; }
-}
+var package = np.ReadNextPackage();

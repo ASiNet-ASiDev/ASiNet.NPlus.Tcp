@@ -1,17 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿namespace ASiNet.NPlus.Tcp;
 
-namespace ASiNet.NPlus.Tcp;
-public readonly record struct ResponsePackage(byte[] Data, NPlusStatus Status, DateTime SendedTime, DateTime AcceptedTime);
-
-public readonly record struct RequestPackage(Guid Id, byte[] Data, NPlusStatus Status, DateTime SendedTime, DateTime AcceptedTime);
-
-public readonly record struct ResponsePackage<TObj>(TObj? Data, NPlusStatus Status, DateTime SendedTime, DateTime AcceptedTime);
-
-public readonly record struct RequestPackage<TObj>(Guid Id, NPlusStatus Status, TObj? Data, DateTime SendedTime, DateTime AcceptedTime);
+public readonly record struct Package(Guid Id, byte[] Data, NPlusStatus Status, DateTime SendedTime, DateTime AcceptedTime);
+public readonly record struct Package<TObj>(Guid Id, NPlusStatus Status, TObj? Data, DateTime SendedTime, DateTime AcceptedTime);
 
 
 internal struct PackageHeader
